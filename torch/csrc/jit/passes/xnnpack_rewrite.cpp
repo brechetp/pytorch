@@ -1,10 +1,16 @@
+
+#include <ATen/core/jit_type.h>
+#include <ATen/native/xnnpack/OpContext.h>
+
 #include <torch/csrc/jit/passes/constant_pooling.h>
 #include <torch/csrc/jit/passes/constant_propagation.h>
 #include <torch/csrc/jit/passes/xnnpack_rewrite.h>
 #include <torch/csrc/jit/passes/fuse_linear.h>
 #include <torch/csrc/jit/passes/graph_rewrite_helper.h>
+#include <torch/csrc/jit/passes/prepack_folding.h>
 #include <torch/csrc/jit/passes/subgraph_rewrite.h>
 #include <torch/csrc/jit/ir/subgraph_matcher.h>
+#include <torch/csrc/jit/ir/ir.h>
 
 namespace torch {
 namespace jit {
@@ -12,6 +18,15 @@ namespace jit {
 #ifdef USE_XNNPACK
 
 namespace {
+std::unordered_set<std::string>* getFoldablePackingOps() {
+  static std::unordered_set<std::string> foldable_packing_ops(
+      {
+      "xnnpack::linear_prepack",
+      "xnnpack::conv2d_prepack"
+      }
+      );
+  return &foldable_packing_ops;
+}
 
 void insertXNNPACKLinearOp(std::shared_ptr<Graph>& graph) {
   std::string linear_before_inline = R"(
@@ -93,6 +108,15 @@ void insertXNNPACKOps(script::Module& module) {
   }
 }
 
+void FoldXNNPACKPrePackingOps(script::Module& m) {
+  const auto& foldable_prepacking_ops = *(getFoldablePackingOps());
+  PrePackingOpsFilterFn filter_fn =
+    [&foldable_prepacking_ops](const Node* n) -> bool {
+      return (foldable_prepacking_ops.count(n->kind().toQualString()) != 0);
+    };
+  FoldPrePackingOps(m, filter_fn);
+}
+
 #else
 
 void insertXNNPACKOps(std::shared_ptr<Graph>& graph) {
@@ -100,6 +124,10 @@ void insertXNNPACKOps(std::shared_ptr<Graph>& graph) {
 }
 
 void insertXNNPACKOps(script::Module& module) {
+  TORCH_INTERNAL_ASSERT("XNNPACK is not enabled. Please build with USE_XNNPACK=1");
+}
+
+void FoldXNNPACKPrePackingOps(script::Module& m) {
   TORCH_INTERNAL_ASSERT("XNNPACK is not enabled. Please build with USE_XNNPACK=1");
 }
 
